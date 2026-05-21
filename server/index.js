@@ -44,13 +44,19 @@ function broadcast(worldId, msg) {
 }
 fastify.decorate("broadcast", broadcast);
 
-fastify.get("/live/:worldId", { websocket: true }, (conn, req) => {
+// @fastify/websocket v10+ passes the raw WebSocket directly (not a {socket} wrapper).
+fastify.get("/live/:worldId", { websocket: true }, (socket, req) => {
   const worldId = parseInt(req.params.worldId, 10);
   if (!sockets.has(worldId)) sockets.set(worldId, new Set());
   const set = sockets.get(worldId);
-  set.add(conn.socket);
-  conn.socket.on("close", () => set.delete(conn.socket));
-  conn.socket.send(JSON.stringify({ type: "hello", worldId }));
+  set.add(socket);
+  socket.on("close", () => set.delete(socket));
+  socket.on("error", () => set.delete(socket));
+  try {
+    socket.send(JSON.stringify({ type: "hello", worldId }));
+  } catch {
+    /* ignore */
+  }
 });
 
 // --- Routes ---

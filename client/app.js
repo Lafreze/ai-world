@@ -213,40 +213,60 @@ function updateCamera() {
   camera.lookAt(target);
 }
 
+// Mouse: left-drag = orbit. Click without movement = paint (admin only, when paint mode is on).
 let dragging = false;
 let lastX = 0;
 let lastZ = 0;
+let downX = 0;
+let downY = 0;
+let downMoved = false;
+let downShift = false;
+let downButton = 0;
+
 canvas.addEventListener("mousedown", (e) => {
-  if (e.button === 0 && !e.shiftKey && editorActive() && hoveredCell) {
-    paintCell(hoveredCell.x, hoveredCell.z, false);
-    return;
-  }
-  if (e.button === 0 && e.shiftKey && editorActive() && hoveredCell) {
-    paintCell(hoveredCell.x, hoveredCell.z, true);
-    return;
-  }
+  if (e.button !== 0 && e.button !== 2) return;
+  dragging = true;
+  downMoved = false;
+  downX = e.clientX;
+  downY = e.clientY;
+  lastX = e.clientX;
+  lastZ = e.clientY;
+  downShift = e.shiftKey;
+  downButton = e.button;
+});
+
+window.addEventListener("mouseup", (e) => {
+  if (!dragging) return;
+  dragging = false;
+  // Treat as a click only if (1) left button, (2) we didn't drag, (3) admin paint mode is on, (4) we have a hovered cell.
   if (
-    e.button === 2 ||
-    (e.button === 0 && e.altKey) ||
-    (e.button === 0 && !editorActive())
+    downButton === 0 &&
+    !downMoved &&
+    paintMode &&
+    editorActive() &&
+    hoveredCell
   ) {
-    dragging = true;
-    lastX = e.clientX;
-    lastZ = e.clientY;
+    paintCell(hoveredCell.x, hoveredCell.z, downShift);
   }
 });
-window.addEventListener("mouseup", () => (dragging = false));
+
 window.addEventListener("mousemove", (e) => {
   if (!dragging) return;
   const dx = e.clientX - lastX;
   const dy = e.clientY - lastZ;
   lastX = e.clientX;
   lastZ = e.clientY;
-  camState.theta -= dx * 0.008;
-  camState.phi = Math.max(
-    0.1,
-    Math.min(Math.PI / 2 - 0.05, camState.phi - dy * 0.008),
-  );
+  // After a small threshold, treat the gesture as a drag (orbit), not a click.
+  if (!downMoved && Math.hypot(e.clientX - downX, e.clientY - downY) > 4) {
+    downMoved = true;
+  }
+  if (downMoved) {
+    camState.theta -= dx * 0.008;
+    camState.phi = Math.max(
+      0.1,
+      Math.min(Math.PI / 2 - 0.05, camState.phi - dy * 0.008),
+    );
+  }
 });
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 canvas.addEventListener(
@@ -311,9 +331,38 @@ hoverHelper.visible = false;
 scene.add(hoverHelper);
 
 // ----- Editor -----
+let paintMode = false;
 function editorActive() {
   return authState.user?.role === "admin";
 }
+
+function setPaintMode(on) {
+  paintMode = on;
+  const btn = document.getElementById("ed-paint");
+  if (btn) {
+    btn.textContent = paintMode
+      ? "Painting: ON (click tiles)"
+      : "Painting: OFF";
+    btn.style.background = paintMode ? "#3a6b3a" : "";
+  }
+  canvas.style.cursor = paintMode ? "crosshair" : "";
+}
+
+// Keyboard controls: WASD pans camera target, QE zooms, R/F adjusts pitch.
+window.addEventListener("keydown", (e) => {
+  if (e.target?.tagName === "INPUT" || e.target?.tagName === "SELECT") return;
+  const step = 1;
+  const k = e.key.toLowerCase();
+  if (k === "w") camState.target.z -= step;
+  else if (k === "s") camState.target.z += step;
+  else if (k === "a") camState.target.x -= step;
+  else if (k === "d") camState.target.x += step;
+  else if (k === "q") camState.dist = Math.max(6, camState.dist - 1);
+  else if (k === "e") camState.dist = Math.min(80, camState.dist + 1);
+  else if (k === "p") {
+    if (editorActive()) setPaintMode(!paintMode);
+  }
+});
 
 async function paintCell(x, z, erase) {
   const terrain = erase ? "grass" : document.getElementById("ed-terrain").value;
@@ -341,6 +390,10 @@ async function paintCell(x, z, erase) {
     terrain_floors: 1,
   });
 }
+
+document.getElementById("ed-paint")?.addEventListener("click", () => {
+  setPaintMode(!paintMode);
+});
 
 document.getElementById("ed-clear")?.addEventListener("click", async () => {
   if (!confirm("Clear entire world?")) return;
