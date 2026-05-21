@@ -81,6 +81,20 @@ async function tickWorld(world, fastify) {
   const cellMap = new Map();
   for (const c of cellsRes.rows) cellMap.set(`${c.x},${c.z}`, c);
 
+  // Pull the last 30 seconds of speech in this world so agents can actually
+  // respond to what was just said instead of greeting in a vacuum.
+  const saysRes = await query(
+    `SELECT e.agent_id, a.name AS speaker, a.x AS sx, a.z AS sz,
+            e.payload, e.created_at
+       FROM agent_events e
+       JOIN agents a ON a.id = e.agent_id
+      WHERE e.world_id = $1 AND e.event_type = 'say'
+        AND e.created_at > NOW() - interval '30 seconds'
+      ORDER BY e.created_at DESC
+      LIMIT 30`,
+    [world.id],
+  );
+
   const occupied = new Set();
   for (const a of allAgents.rows) occupied.add(`${a.x},${a.z}`);
 
@@ -89,6 +103,7 @@ async function tickWorld(world, fastify) {
     tick: tickCount,
     cellMap,
     agents: allAgents.rows,
+    recentSays: saysRes.rows,
     gridSize: world.grid_size,
     occupied,
     broadcast: fastify.broadcast,

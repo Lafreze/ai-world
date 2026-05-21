@@ -8,7 +8,7 @@ const DEFAULT_MODEL = process.env.OPENAI_MODEL || "gpt-5.4-mini";
 
 // Build a compact perception summary for an agent.
 export function perceive(agent, ctx) {
-  const { cellMap, agents, gridSize } = ctx;
+  const { cellMap, agents, gridSize, recentSays = [] } = ctx;
   const half = Math.floor(gridSize / 2);
   const around = [];
   for (let dz = -2; dz <= 2; dz++) {
@@ -35,7 +35,25 @@ export function perceive(agent, ctx) {
     .filter((n) => n.dist <= 4)
     .sort((a, b) => a.dist - b.dist)
     .slice(0, 4);
-  return { around, neighbors };
+
+  // Pull recent speech from agents within hearing range (manhattan dist ≤ 4),
+  // excluding self. Ordered oldest → newest, capped to 5 lines.
+  const now = Date.now();
+  const recent_dialog = recentSays
+    .filter((s) => s.agent_id !== agent.id)
+    .filter((s) => {
+      const dist = Math.abs(s.sx - agent.x) + Math.abs(s.sz - agent.z);
+      return dist <= 4;
+    })
+    .slice(0, 5)
+    .reverse()
+    .map((s) => ({
+      speaker: s.speaker,
+      text: s.payload?.text || "",
+      age_seconds: Math.max(0, (now - new Date(s.created_at).getTime()) / 1000),
+    }));
+
+  return { around, neighbors, recent_dialog };
 }
 
 // ----- Dialogue templates -----
@@ -75,6 +93,81 @@ const SOLO_LINES = [
 
 function pick(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
+}
+
+// Build a context-aware reply to a specific line another agent just said.
+// Keyword-routed so the reply at least relates to the topic instead of being
+// a random nod. Falls back to short acks otherwise.
+function buildReply(agent, speaker, line) {
+  const lower = (line || "").toLowerCase();
+  if (lower.includes("?")) {
+    return pick([
+      `Hmm, not sure ${speaker}.`,
+      `Yeah, probably.`,
+      `Hard to say.`,
+      `I think so too.`,
+      `Maybe.`,
+    ]);
+  }
+  if (lower.includes("pond") || lower.includes("water")) {
+    return pick([
+      `It really is, ${speaker}.`,
+      `Maybe we go swimming?`,
+      `I like the pond.`,
+      `So calm today.`,
+    ]);
+  }
+  if (
+    lower.includes("tree") ||
+    lower.includes("flower") ||
+    lower.includes("bush")
+  ) {
+    return pick([
+      `Yeah, lovely isn't it.`,
+      `So pretty.`,
+      `Mhm, I noticed.`,
+      `Smells nice.`,
+    ]);
+  }
+  if (lower.includes("house")) {
+    return pick([
+      `Cozy little place.`,
+      `Hope someone's home.`,
+      `Maybe knock later.`,
+    ]);
+  }
+  if (
+    lower.includes("hi ") ||
+    lower.includes("hey ") ||
+    lower.includes("hello") ||
+    lower.includes("morning")
+  ) {
+    // Don't just say "hi" back — advance to small talk so the conversation moves on.
+    return pick([
+      `Hey ${speaker}! What's new?`,
+      `Good to see you. Out for a walk?`,
+      `Hi! How have you been?`,
+      `Were you headed somewhere, ${speaker}?`,
+    ]);
+  }
+  if (lower.includes("tired") || lower.includes("exhaust")) {
+    return pick([
+      `Get some rest then.`,
+      `Same here, honestly.`,
+      `Long day, huh.`,
+    ]);
+  }
+  if (lower.includes("hungry") || lower.includes("eat")) {
+    return pick([`Me too, actually.`, `Let's find food.`, `I have nothing.`]);
+  }
+  return pick([
+    `${speaker}, agreed.`,
+    `Hmm interesting.`,
+    `Tell me more, ${speaker}.`,
+    `Right.`,
+    `Yeah?`,
+    `That's something.`,
+  ]);
 }
 
 // Build a contextual greeting that may reference visible objects/terrain.
@@ -149,6 +242,24 @@ export function ruleDecide(agent, perception, agents) {
 
   const adjacent = perception.neighbors.find((n) => n.dist <= 1);
 
+  // Did the adjacent neighbor say something to us very recently?
+  const recent = perception.recent_dialog || [];
+  const incoming = adjacent
+    ? [...recent]
+        .reverse()
+        .find((d) => d.speaker === adjacent.name && d.age_seconds < 8)
+    : null;
+
+  // Highest priority when next to someone who JUST spoke to us, AND it's our
+  // turn (we didn't just speak). Reply directly to their line.
+  if (adjacent && incoming && agent.last_action !== "say") {
+    return {
+      type: "say",
+      text: buildReply(agent, adjacent.name, incoming.text),
+      thought: `Replying to ${adjacent.name}: "${incoming.text.slice(0, 30)}"`,
+    };
+  }
+
   // Mid-conversation: just spoke and someone is still right next to us.
   // Never walk away — either follow up or listen quietly.
   if (agent.last_action === "say" && adjacent) {
@@ -162,7 +273,7 @@ export function ruleDecide(agent, perception, agents) {
     return { type: "idle", thought: `Listening to ${adjacent.name}.` };
   }
 
-  // Adjacent neighbor → talk to them, don't move.
+  // Adjacent neighbor → start a conversation (greet them), don't move.
   if (adjacent) {
     const greetChance = 0.5 + social * 0.4;
     if (Math.random() < greetChance) {
@@ -224,10 +335,11 @@ Allowed actions:
 - {"type":"idle","thought":"..."}
 
 Behavior rules:
-- If a neighbor is at dist=1 (adjacent), DO NOT move — greet them with "say".
+- perception.recent_dialog lists things OTHER agents said near you (oldest → newest). If the latest entry is from an adjacent neighbor and age_seconds < 8, you MUST reply to that specific line in character. Do NOT start a new greeting, do NOT ignore them, do NOT walk away.
+- If recent_dialog is empty and a neighbor is at dist=1, you may greet them with "say".
 - If a neighbor is at dist>1 and you want to talk, choose "move" in the direction that REDUCES dist to them (perception lists each neighbor's dx,dz).
-- If you just spoke (last_thought is your line) and a neighbor is still adjacent, do not "move"; either say a follow-up or "idle".
-- "say" text must be varied, under 50 chars, in character, may reference what's around. Never repeat your last line verbatim.
+- If you just spoke (your last_thought is the line) and a neighbor is still adjacent, do not "move"; either say a follow-up or "idle".
+- "say" text must be varied, under 50 chars, in character, can reference what's around or what they said. Never repeat your own last line verbatim. Avoid generic "Hi" if recent_dialog already has greetings.
 Respond ONLY with JSON.`;
 
 export async function llmDecide(agent, perception) {
