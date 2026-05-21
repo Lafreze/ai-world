@@ -197,11 +197,14 @@ function escapeHtml(s) {
   );
 }
 
-// ----- Camera orbit controls (minimal) -----
+// ----- Camera orbit + pan controls -----
+// theta = azimuth around Y, phi = polar from +Y (smaller = more top-down).
+// Default: looking down at the map center from a slight angle so the whole
+// village is visible without scrolling.
 const DEFAULT_CAM = {
   theta: Math.PI / 4,
-  phi: Math.PI / 3.5,
-  dist: 20,
+  phi: Math.PI / 4,
+  dist: 28,
 };
 const camState = {
   theta: DEFAULT_CAM.theta,
@@ -210,11 +213,13 @@ const camState = {
   target: new THREE.Vector3(0, 0, 0),
 };
 function clampCamera() {
-  const half = Math.max(8, Math.floor(gridSize / 2));
+  // Allow panning a bit beyond the grid so users can comfortably frame edge tiles.
+  const half = Math.max(8, Math.floor(gridSize / 2)) + 4;
   camState.target.x = Math.max(-half, Math.min(half, camState.target.x));
   camState.target.z = Math.max(-half, Math.min(half, camState.target.z));
+  camState.target.y = 0;
   camState.dist = Math.max(6, Math.min(80, camState.dist));
-  camState.phi = Math.max(0.1, Math.min(Math.PI / 2 - 0.05, camState.phi));
+  camState.phi = Math.max(0.15, Math.min(Math.PI / 2 - 0.05, camState.phi));
 }
 function resetCamera() {
   camState.theta = DEFAULT_CAM.theta;
@@ -230,6 +235,20 @@ function updateCamera() {
   const z = target.z + dist * Math.sin(phi) * Math.sin(theta);
   camera.position.set(x, y, z);
   camera.lookAt(target);
+}
+
+// Pan the target along the ground plane in the camera's screen-right / screen-forward axes.
+function panTarget(dx, dy) {
+  // Forward = horizontal projection of the look direction (target - camera).
+  const fx = -Math.sin(camState.theta);
+  const fz = -Math.cos(camState.theta);
+  // Right = forward rotated -90° around Y.
+  const rx = -fz;
+  const rz = fx;
+  // Scale by distance so panning feels consistent at any zoom.
+  const k = camState.dist * 0.0025;
+  camState.target.x += (-dx * rx + dy * fx) * k;
+  camState.target.z += (-dx * rz + dy * fz) * k;
 }
 
 // Mouse: left-drag = orbit. Click without movement = paint (admin only, when paint mode is on).
@@ -275,14 +294,19 @@ window.addEventListener("mousemove", (e) => {
   const dy = e.clientY - lastZ;
   lastX = e.clientX;
   lastZ = e.clientY;
-  // After a small threshold, treat the gesture as a drag (orbit), not a click.
+  // After a small threshold, treat the gesture as a drag (orbit/pan), not a click.
   if (!downMoved && Math.hypot(e.clientX - downX, e.clientY - downY) > 4) {
     downMoved = true;
   }
-  if (downMoved) {
+  if (!downMoved) return;
+  // Right mouse button OR shift+left = pan. Plain left = orbit.
+  const isPan = downButton === 2 || downShift;
+  if (isPan) {
+    panTarget(dx, dy);
+  } else {
     camState.theta -= dx * 0.008;
     camState.phi = Math.max(
-      0.1,
+      0.15,
       Math.min(Math.PI / 2 - 0.05, camState.phi - dy * 0.008),
     );
   }
