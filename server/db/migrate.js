@@ -8,7 +8,7 @@ import { pool } from "./index.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsDir = path.resolve(__dirname, "../../db/migrations");
 
-async function run() {
+export async function runMigrations({ closePool = false } = {}) {
   const files = (await fs.readdir(migrationsDir))
     .filter((f) => f.endsWith(".sql"))
     .sort();
@@ -18,7 +18,6 @@ async function run() {
     await pool.query(sql);
   }
 
-  // Ensure default admin user exists
   const adminUser = process.env.ADMIN_USERNAME || "admin";
   const adminPass = process.env.ADMIN_PASSWORD || "admin123";
   const hash = await bcrypt.hash(adminPass, 10);
@@ -30,7 +29,6 @@ async function run() {
   );
   console.log(`[migrate] admin user '${adminUser}' ready`);
 
-  // Ensure a default world exists
   const w = await pool.query(`SELECT id FROM worlds ORDER BY id ASC LIMIT 1`);
   if (w.rows.length === 0) {
     const owner = await pool.query(`SELECT id FROM users WHERE username=$1`, [
@@ -44,11 +42,35 @@ async function run() {
     console.log(`[migrate] created default world id=${ins.rows[0].id}`);
   }
 
-  await pool.end();
+  if (closePool) await pool.end();
   console.log("[migrate] done");
 }
 
-run().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Retry wrapper for boot-time migration: DB may not be ready immediately.
+export async function runMigrationsWithRetry(
+  maxAttempts = 12,
+  baseDelayMs = 2000,
+) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await runMigrations({ closePool: false });
+      return true;
+    } catch (err) {
+      const wait = Math.min(15000, baseDelayMs * attempt);
+      console.warn(
+        `[migrate] attempt ${attempt}/${maxAttempts} failed (${err.code || err.message}); retrying in ${wait}ms`,
+      );
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+  console.error("[migrate] giving up after retries");
+  return false;
+}
+
+// Allow running as a CLI: `node server/db/migrate.js`
+if (import.meta.url === `file://${process.argv[1]}`) {
+  runMigrations({ closePool: true }).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

@@ -12,6 +12,7 @@ import authRoutes from "./routes/auth.js";
 import worldRoutes from "./routes/world.js";
 import agentsRoutes from "./routes/agents.js";
 import { startSimulation, stopSimulation } from "./sim/tick.js";
+import { runMigrationsWithRetry } from "./db/migrate.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -69,9 +70,23 @@ const port = parseInt(process.env.PORT || "3000", 10);
 await fastify.listen({ port, host: "0.0.0.0" });
 fastify.log.info(`server up on :${port}`);
 
-if (process.env.DISABLE_SIM !== "1") {
-  startSimulation(fastify);
-}
+// Run migrations + start sim in the background so healthcheck isn't blocked
+// by a slow DB cold-start.
+(async () => {
+  if (process.env.SKIP_MIGRATIONS === "1") {
+    fastify.log.info("[boot] SKIP_MIGRATIONS=1, not running migrations");
+  } else {
+    const ok = await runMigrationsWithRetry();
+    if (!ok) {
+      fastify.log.error(
+        "[boot] migrations failed; server is running but DB is unavailable",
+      );
+    }
+  }
+  if (process.env.DISABLE_SIM !== "1") {
+    startSimulation(fastify);
+  }
+})();
 
 const shutdown = async () => {
   stopSimulation();
