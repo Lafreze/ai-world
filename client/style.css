@@ -56,6 +56,11 @@ button {
 button:hover {
   background: #364055;
 }
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: #2c3340;
+}
 
 #editor {
   position: fixed;

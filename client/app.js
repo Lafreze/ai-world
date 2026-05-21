@@ -325,8 +325,18 @@ canvas.addEventListener(
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 let hoveredCell = null;
+let selectedCell = null;
 let hoveredAgentId = null;
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+
+function setHoveredCell(c) {
+  hoveredCell = c;
+  updateSpawnButtonState();
+}
+function setSelectedCell(c) {
+  selectedCell = c;
+  updateSpawnButtonState();
+}
 
 canvas.addEventListener("mousemove", (e) => {
   const rect = canvas.getBoundingClientRect();
@@ -341,9 +351,9 @@ canvas.addEventListener("mousemove", (e) => {
     const cz = Math.floor(hit.z);
     const half = Math.floor(gridSize / 2);
     if (cx >= -half && cx < half && cz >= -half && cz < half) {
-      hoveredCell = { x: cx, z: cz };
-    } else hoveredCell = null;
-  }
+      setHoveredCell({ x: cx, z: cz });
+    } else setHoveredCell(null);
+  } else setHoveredCell(null);
 
   // Agent hover
   const groups = [];
@@ -360,6 +370,12 @@ canvas.addEventListener("mousemove", (e) => {
   } else hoveredAgentId = null;
 });
 
+// Clear hover preview when the cursor leaves the canvas. Do NOT clear selection.
+canvas.addEventListener("mouseleave", () => {
+  setHoveredCell(null);
+  hoveredAgentId = null;
+});
+
 // Hover highlight
 const hoverHelper = new THREE.Mesh(
   new THREE.PlaneGeometry(1, 1),
@@ -372,6 +388,19 @@ const hoverHelper = new THREE.Mesh(
 hoverHelper.rotation.x = -Math.PI / 2;
 hoverHelper.visible = false;
 scene.add(hoverHelper);
+
+// Persistent highlight for the selected cell (spawn target).
+const selectHelper = new THREE.Mesh(
+  new THREE.PlaneGeometry(1, 1),
+  new THREE.MeshBasicMaterial({
+    color: 0x6fb3ff,
+    transparent: true,
+    opacity: 0.45,
+  }),
+);
+selectHelper.rotation.x = -Math.PI / 2;
+selectHelper.visible = false;
+scene.add(selectHelper);
 
 // ----- Editor -----
 let paintMode = false;
@@ -452,21 +481,33 @@ document.getElementById("ed-clear")?.addEventListener("click", async () => {
 });
 
 document.getElementById("ag-spawn")?.addEventListener("click", async () => {
-  if (!hoveredCell) {
-    alert("Hover a cell first.");
+  const targetCell = selectedCell ?? hoveredCell;
+  if (!targetCell) {
+    alert("Select a tile first.");
     return;
   }
   const name = document.getElementById("ag-name").value.trim() || randomName();
   const r = await fetch(`/api/worlds/${worldId}/agents`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ name, x: hoveredCell.x, z: hoveredCell.z }),
+    body: JSON.stringify({ name, x: targetCell.x, z: targetCell.z }),
   });
   if (!r.ok) {
     alert("Spawn failed: " + (await r.text()));
     return;
   }
+  // Clear the selection so the next spawn requires an explicit pick.
+  setSelectedCell(null);
 });
+
+function updateSpawnButtonState() {
+  const btn = document.getElementById("ag-spawn");
+  if (!btn) return;
+  const ready = !!(selectedCell || hoveredCell);
+  btn.disabled = !ready;
+  btn.textContent = ready ? "Spawn Agent Here" : "Select a tile first";
+  btn.title = ready ? "" : "Click a tile on the map to choose a spawn position";
+}
 
 function randomName() {
   const a = [
@@ -545,13 +586,27 @@ document.getElementById("welcome-close")?.addEventListener("click", () => {
 // ----- Inspector -----
 let selectedAgentId = null;
 
-// Click on the canvas while NOT in paint mode and hovering an agent → select it.
+// Click on the canvas (not paint mode):
+//   - hovering an agent → select that agent for inspection / AI panel
+//   - hovering a tile → set it as the spawn target (selectedCell)
+//   - clicking outside the grid → clear selectedCell
 canvas.addEventListener("click", () => {
   if (paintMode) return;
   if (hoveredAgentId) {
     selectedAgentId = hoveredAgentId;
     populateAIPanel();
+    return;
   }
+  if (hoveredCell) {
+    setSelectedCell({ ...hoveredCell });
+  } else {
+    setSelectedCell(null);
+  }
+});
+
+// Esc clears the selected spawn tile.
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") setSelectedCell(null);
 });
 
 function inspectedAgentId() {
@@ -622,11 +677,45 @@ document.getElementById("ai-delete")?.addEventListener("click", async () => {
   }
 });
 
+function getCellInfo(x, z) {
+  const half = Math.floor(gridSize / 2);
+  if (x < -half || x >= half || z < -half || z >= half) return null;
+  const stored = worldRenderer.cells.get(`${x},${z}`)?.data;
+  const terrain = stored?.terrain ?? "grass";
+  const kind = stored?.kind ?? null;
+  const walkable = terrain !== "water" || kind === "bridge";
+  const buildable = !kind && terrain !== "water";
+  return { x, z, terrain, kind, walkable, buildable };
+}
+
+function renderCellRows(label, c) {
+  if (!c) return "";
+  return `
+    <div class="row"><span class="k">${label}</span><span>(${c.x}, ${c.z})</span></div>
+    <div class="row"><span class="k">Terrain</span><span>${escapeHtml(c.terrain)}</span></div>
+    <div class="row"><span class="k">Object</span><span>${escapeHtml(c.kind || "—")}</span></div>
+    <div class="row"><span class="k">Walkable</span><span>${c.walkable ? "yes" : "no"}</span></div>
+    <div class="row"><span class="k">Buildable</span><span>${c.buildable ? "yes" : "no"}</span></div>
+  `;
+}
+
 function updateInspector() {
   const body = document.getElementById("ins-body");
   const id = inspectedAgentId();
   if (!id) {
-    body.textContent = "Hover an agent…";
+    const sel = selectedCell
+      ? getCellInfo(selectedCell.x, selectedCell.z)
+      : null;
+    const hov = hoveredCell ? getCellInfo(hoveredCell.x, hoveredCell.z) : null;
+    if (sel || hov) {
+      body.innerHTML = `
+        ${sel ? `<div><b>Selected tile</b></div>${renderCellRows("Pos", sel)}` : ""}
+        ${sel && hov ? `<hr style="opacity:0.2; margin:6px 0"/>` : ""}
+        ${hov ? `<div><b>Hovered tile</b></div>${renderCellRows("Pos", hov)}` : ""}
+      `;
+    } else {
+      body.textContent = "Hover an agent or a tile…";
+    }
     return;
   }
   const node = agentNodes.get(id);
@@ -781,12 +870,19 @@ function frame(now) {
     }
   }
 
-  // Hover highlight
+  // Hover highlight (transient preview)
   if (hoveredCell) {
     hoverHelper.visible = true;
     hoverHelper.position.set(hoveredCell.x + 0.5, 0.01, hoveredCell.z + 0.5);
   } else {
     hoverHelper.visible = false;
+  }
+  // Persistent selected-tile highlight (spawn target)
+  if (selectedCell) {
+    selectHelper.visible = true;
+    selectHelper.position.set(selectedCell.x + 0.5, 0.02, selectedCell.z + 0.5);
+  } else {
+    selectHelper.visible = false;
   }
 
   updateInspector();
