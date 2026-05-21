@@ -132,6 +132,21 @@ button:hover {
   background: #6fb3ff;
 }
 
+#inspector textarea {
+  width: 100%;
+  background: #1a2030;
+  color: #e6e8eb;
+  border: 1px solid #303848;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-family: inherit;
+  font-size: 11px;
+  resize: vertical;
+}
+#ins-admin .ed-row input {
+  font-size: 11px;
+}
+
 #chat-feed {
   position: fixed;
   bottom: 12px;

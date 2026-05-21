@@ -42,7 +42,10 @@ export default async function worldRoutes(fastify) {
       [id],
     );
     const ar = await query(
-      `SELECT id, name, x, z, facing, appearance, attributes, last_action, last_thought FROM agents WHERE world_id=$1`,
+      `SELECT id, name, x, z, facing, appearance, personality, attributes,
+              last_action, last_thought,
+              tick_interval_ms, llm_probability, ai_model, system_prompt
+       FROM agents WHERE world_id=$1`,
       [id],
     );
     return { world: wr.rows[0], cells: cr.rows, agents: ar.rows };

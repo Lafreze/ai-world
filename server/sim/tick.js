@@ -6,12 +6,12 @@ let tickCount = 0;
 let running = false;
 let timer = null;
 let dbDown = false;
-let dbDownSince = 0;
+
+const SCHEDULER_MS = parseInt(process.env.SCHEDULER_MS || "250", 10);
 
 export function startSimulation(fastify) {
   if (running) return;
   running = true;
-  const interval = parseInt(process.env.TICK_INTERVAL_MS || "1500", 10);
 
   async function step() {
     try {
@@ -32,7 +32,6 @@ export function startSimulation(fastify) {
       ) {
         if (!dbDown) {
           dbDown = true;
-          dbDownSince = Date.now();
           console.warn(
             `[tick] db unreachable (${err.code}); will keep retrying quietly`,
           );
@@ -42,14 +41,14 @@ export function startSimulation(fastify) {
       }
     } finally {
       if (running) {
-        const delay = dbDown ? Math.min(10000, interval * 4) : interval;
+        const delay = dbDown ? 4000 : SCHEDULER_MS;
         timer = setTimeout(step, delay);
       }
     }
   }
 
-  timer = setTimeout(step, interval);
-  console.log(`[sim] started (interval=${interval}ms)`);
+  timer = setTimeout(step, SCHEDULER_MS);
+  console.log(`[sim] started (scheduler=${SCHEDULER_MS}ms)`);
 }
 
 export function stopSimulation() {
@@ -58,8 +57,21 @@ export function stopSimulation() {
 }
 
 async function tickWorld(world, fastify) {
-  const agentsRes = await query(
-    `SELECT * FROM agents WHERE world_id=$1 ORDER BY id ASC`,
+  // Pull only agents whose next_tick_at is due. Lock them by bumping next_tick_at
+  // up-front to a future placeholder so the same agent isn't re-picked while
+  // its decision is being computed.
+  const due = await query(
+    `SELECT * FROM agents
+     WHERE world_id=$1 AND next_tick_at <= NOW()
+     ORDER BY next_tick_at ASC
+     LIMIT 8`,
+    [world.id],
+  );
+  if (due.rows.length === 0) return;
+
+  // Snapshot the full agent + cell state once for perception.
+  const allAgents = await query(
+    `SELECT id, name, x, z, facing, attributes FROM agents WHERE world_id=$1`,
     [world.id],
   );
   const cellsRes = await query(
@@ -70,26 +82,38 @@ async function tickWorld(world, fastify) {
   for (const c of cellsRes.rows) cellMap.set(`${c.x},${c.z}`, c);
 
   const occupied = new Set();
-  for (const a of agentsRes.rows) occupied.add(`${a.x},${a.z}`);
+  for (const a of allAgents.rows) occupied.add(`${a.x},${a.z}`);
 
   const ctx = {
     worldId: world.id,
     tick: tickCount,
     cellMap,
-    agents: agentsRes.rows,
+    agents: allAgents.rows,
     gridSize: world.grid_size,
     occupied,
     broadcast: fastify.broadcast,
   };
 
-  // Decisions are async (LLM); run sequentially to keep budget predictable.
-  for (const agent of agentsRes.rows) {
-    const action = await decide(agent, ctx);
-    await applyAction(agent, action, ctx);
-    if (action.thought) {
-      await logEvent(agent.id, world.id, tickCount, "think", {
-        thought: action.thought,
-      });
+  for (const agent of due.rows) {
+    try {
+      const action = await decide(agent, ctx);
+      await applyAction(agent, action, ctx);
+      if (action.thought) {
+        await logEvent(agent.id, world.id, tickCount, "think", {
+          thought: action.thought,
+        });
+      }
+    } catch (err) {
+      console.warn(`[tick] agent ${agent.id} failed:`, err.message);
+    } finally {
+      // Schedule the agent's next decision based on its own interval (with a tiny jitter).
+      const interval = Math.max(200, agent.tick_interval_ms || 1500);
+      const jitter = Math.floor(Math.random() * 200);
+      await query(
+        `UPDATE agents SET next_tick_at = NOW() + ($1::int || ' milliseconds')::interval
+         WHERE id=$2`,
+        [interval + jitter, agent.id],
+      );
     }
   }
 }

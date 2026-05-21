@@ -41,7 +41,9 @@ export default async function agentsRoutes(fastify) {
     const id = parseInt(req.params.id, 10);
     const r = await query(
       `SELECT id, name, x, z, facing, appearance, personality, attributes,
-              memory, goals, last_action, last_thought, created_at
+              memory, goals, last_action, last_thought,
+              tick_interval_ms, llm_probability, ai_model, system_prompt,
+              created_at
        FROM agents WHERE world_id=$1 ORDER BY id ASC`,
       [id],
     );
@@ -119,11 +121,20 @@ export default async function agentsRoutes(fastify) {
     { preHandler: fastify.adminRequired },
     async (req) => {
       const id = parseInt(req.params.id, 10);
-      const fields = ["name", "x", "z", "facing"];
+      const scalarFields = [
+        "name",
+        "x",
+        "z",
+        "facing",
+        "tick_interval_ms",
+        "llm_probability",
+        "ai_model",
+        "system_prompt",
+      ];
       const sets = [];
       const vals = [];
       let i = 1;
-      for (const f of fields) {
+      for (const f of scalarFields) {
         if (req.body?.[f] !== undefined) {
           sets.push(`${f}=$${i++}`);
           vals.push(req.body[f]);

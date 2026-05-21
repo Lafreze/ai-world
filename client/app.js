@@ -198,13 +198,32 @@ function escapeHtml(s) {
 }
 
 // ----- Camera orbit controls (minimal) -----
-const camState = {
+const DEFAULT_CAM = {
   theta: Math.PI / 4,
-  phi: Math.PI / 4,
-  dist: 22,
+  phi: Math.PI / 3.5,
+  dist: 20,
+};
+const camState = {
+  theta: DEFAULT_CAM.theta,
+  phi: DEFAULT_CAM.phi,
+  dist: DEFAULT_CAM.dist,
   target: new THREE.Vector3(0, 0, 0),
 };
+function clampCamera() {
+  const half = Math.max(8, Math.floor(gridSize / 2));
+  camState.target.x = Math.max(-half, Math.min(half, camState.target.x));
+  camState.target.z = Math.max(-half, Math.min(half, camState.target.z));
+  camState.dist = Math.max(6, Math.min(80, camState.dist));
+  camState.phi = Math.max(0.1, Math.min(Math.PI / 2 - 0.05, camState.phi));
+}
+function resetCamera() {
+  camState.theta = DEFAULT_CAM.theta;
+  camState.phi = DEFAULT_CAM.phi;
+  camState.dist = DEFAULT_CAM.dist;
+  camState.target.set(0, 0, 0);
+}
 function updateCamera() {
+  clampCamera();
   const { theta, phi, dist, target } = camState;
   const x = target.x + dist * Math.sin(phi) * Math.cos(theta);
   const y = target.y + dist * Math.cos(phi);
@@ -361,8 +380,12 @@ window.addEventListener("keydown", (e) => {
   else if (k === "e") camState.dist = Math.min(80, camState.dist + 1);
   else if (k === "p") {
     if (editorActive()) setPaintMode(!paintMode);
+  } else if (k === "r") {
+    resetCamera();
   }
 });
+
+document.getElementById("resetCamBtn")?.addEventListener("click", resetCamera);
 
 async function paintCell(x, z, erase) {
   const terrain = erase ? "grass" : document.getElementById("ed-terrain").value;
@@ -482,6 +505,13 @@ function refreshAuthUI() {
   // Hide welcome banner once admin logs in, so it doesn't overlap the editor.
   const welcome = document.getElementById("welcome");
   if (welcome && u?.role === "admin") welcome.style.display = "none";
+  // Hide AI control panel if the user is no longer admin.
+  if (u?.role !== "admin") {
+    const panel = document.getElementById("ins-admin");
+    if (panel) panel.style.display = "none";
+  } else {
+    populateAIPanel();
+  }
 }
 
 document.getElementById("welcome-close")?.addEventListener("click", () => {
@@ -489,13 +519,93 @@ document.getElementById("welcome-close")?.addEventListener("click", () => {
 });
 
 // ----- Inspector -----
+let selectedAgentId = null;
+
+// Click on the canvas while NOT in paint mode and hovering an agent → select it.
+canvas.addEventListener("click", () => {
+  if (paintMode) return;
+  if (hoveredAgentId) {
+    selectedAgentId = hoveredAgentId;
+    populateAIPanel();
+  }
+});
+
+function inspectedAgentId() {
+  return selectedAgentId ?? hoveredAgentId;
+}
+
+function populateAIPanel() {
+  const panel = document.getElementById("ins-admin");
+  if (!panel) return;
+  if (!editorActive() || !selectedAgentId) {
+    panel.style.display = "none";
+    return;
+  }
+  const node = agentNodes.get(selectedAgentId);
+  if (!node) {
+    panel.style.display = "none";
+    return;
+  }
+  panel.style.display = "";
+  const d = node.data;
+  document.getElementById("ai-interval").value = d.tick_interval_ms ?? 1500;
+  document.getElementById("ai-prob").value =
+    d.llm_probability != null ? Number(d.llm_probability).toFixed(2) : 0.4;
+  document.getElementById("ai-model").value = d.ai_model ?? "";
+  document.getElementById("ai-prompt").value = d.system_prompt ?? "";
+}
+
+document.getElementById("ai-save")?.addEventListener("click", async () => {
+  if (!selectedAgentId) return;
+  const body = {
+    tick_interval_ms:
+      parseInt(document.getElementById("ai-interval").value, 10) || 1500,
+    llm_probability: parseFloat(document.getElementById("ai-prob").value) || 0,
+    ai_model: document.getElementById("ai-model").value.trim() || null,
+    system_prompt: document.getElementById("ai-prompt").value || null,
+  };
+  const r = await fetch(`/api/agents/${selectedAgentId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  const msg = document.getElementById("ai-msg");
+  if (r.ok) {
+    msg.style.color = "#7acf7a";
+    msg.textContent = "Saved.";
+    const node = agentNodes.get(selectedAgentId);
+    if (node) node.data = { ...node.data, ...body };
+  } else {
+    msg.style.color = "#ff7a7a";
+    msg.textContent = `Failed: ${r.status}`;
+  }
+  setTimeout(() => {
+    msg.textContent = "";
+  }, 2500);
+});
+
+document.getElementById("ai-delete")?.addEventListener("click", async () => {
+  if (!selectedAgentId) return;
+  if (!confirm(`Delete agent #${selectedAgentId}?`)) return;
+  const r = await fetch(`/api/agents/${selectedAgentId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (r.ok) {
+    removeAgentNode(selectedAgentId);
+    selectedAgentId = null;
+    populateAIPanel();
+  }
+});
+
 function updateInspector() {
   const body = document.getElementById("ins-body");
-  if (!hoveredAgentId) {
+  const id = inspectedAgentId();
+  if (!id) {
     body.textContent = "Hover an agent…";
     return;
   }
-  const node = agentNodes.get(hoveredAgentId);
+  const node = agentNodes.get(id);
   if (!node) return;
   const d = node.data;
   const a = d.attributes || {};

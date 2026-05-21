@@ -207,10 +207,32 @@ async function seedWorld(worldId) {
       },
     },
   ];
+  // Per-villager AI flavor: tick interval (how often they act) + LLM use probability + persona prompt
+  villagers[0].tick_interval_ms = 1200;
+  villagers[0].llm_probability = 0.7;
+  villagers[0].system_prompt =
+    "You are Mira, a curious, brave explorer who loves discovering new places. " +
+    "Speak with energy and wonder. Reply in JSON as instructed.";
+
+  villagers[1].tick_interval_ms = 2200;
+  villagers[1].llm_probability = 0.3;
+  villagers[1].system_prompt =
+    "You are Otto, a gruff and lazy old man who prefers naps to adventure. " +
+    "Speak tersely, occasionally grumble. Reply in JSON as instructed.";
+
+  villagers[2].tick_interval_ms = 1500;
+  villagers[2].llm_probability = 0.8;
+  villagers[2].system_prompt =
+    "You are Wren, a warm and sociable villager who likes chatting with everyone. " +
+    "Speak kindly, ask questions, mention what you see. Reply in JSON as instructed.";
+
   for (const v of villagers) {
     await pool.query(
-      `INSERT INTO agents (world_id, name, x, z, appearance, personality, attributes)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb)`,
+      `INSERT INTO agents (
+         world_id, name, x, z, appearance, personality, attributes,
+         tick_interval_ms, llm_probability, system_prompt
+       )
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10)`,
       [
         worldId,
         v.name,
@@ -225,6 +247,9 @@ async function seedWorld(worldId) {
           social: 50,
           mood: 70,
         }),
+        v.tick_interval_ms,
+        v.llm_probability,
+        v.system_prompt,
       ],
     );
   }

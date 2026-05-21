@@ -11,6 +11,7 @@
       <div id="title">AI World</div>
       <div id="status">connecting…</div>
       <div id="me"></div>
+      <button id="resetCamBtn" title="Reset camera (R)">Reset View</button>
       <button id="loginBtn">Login</button>
       <button id="logoutBtn" style="display: none">Logout</button>
     </div>
@@ -72,6 +73,37 @@
     <div id="inspector">
       <div class="ins-title">Inspector</div>
       <div id="ins-body">Hover an agent…</div>
+      <div id="ins-admin" style="display: none">
+        <div class="ins-title" style="margin-top: 10px">AI Control (admin)</div>
+        <div class="ed-row">
+          <label>Tick(ms)</label>
+          <input id="ai-interval" type="number" min="200" step="100" />
+        </div>
+        <div class="ed-row">
+          <label>LLM %</label>
+          <input id="ai-prob" type="number" min="0" max="1" step="0.05" />
+        </div>
+        <div class="ed-row">
+          <label>Model</label>
+          <input id="ai-model" placeholder="(default)" />
+        </div>
+        <div class="ed-row">
+          <label>Prompt</label>
+        </div>
+        <textarea
+          id="ai-prompt"
+          rows="4"
+          placeholder="System prompt (persona)…"
+        ></textarea>
+        <div class="ed-row" style="margin-top: 6px">
+          <button id="ai-save">Save AI Settings</button>
+          <button id="ai-delete" style="background: #6b2c2c">Delete</button>
+        </div>
+        <div
+          id="ai-msg"
+          style="font-size: 11px; opacity: 0.7; min-height: 14px"
+        ></div>
+      </div>
     </div>
 
     <div id="chat-feed"></div>
