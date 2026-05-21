@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>AI World</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div id="hud">
+      <div id="title">AI World</div>
+      <div id="status">connecting…</div>
+      <div id="me"></div>
+      <button id="loginBtn">Login</button>
+      <button id="logoutBtn" style="display: none">Logout</button>
+    </div>
+
+    <div id="editor" style="display: none">
+      <div class="ed-title">Map Editor (admin)</div>
+      <div class="ed-row">
+        <label>Terrain</label>
+        <select id="ed-terrain">
+          <option value="grass">grass</option>
+          <option value="path">path</option>
+          <option value="dirt">dirt</option>
+          <option value="water">water</option>
+          <option value="stone">stone</option>
+          <option value="sand">sand</option>
+          <option value="snow">snow</option>
+        </select>
+      </div>
+      <div class="ed-row">
+        <label>Object</label>
+        <select id="ed-kind">
+          <option value="">(none)</option>
+          <option value="tree">tree</option>
+          <option value="house">house</option>
+          <option value="rock">rock</option>
+          <option value="bridge">bridge</option>
+          <option value="flower">flower</option>
+          <option value="bush">bush</option>
+        </select>
+      </div>
+      <div class="ed-row">
+        <button id="ed-clear">Clear world</button>
+      </div>
+      <div class="ed-hint">Click a tile to paint. Shift+click to erase.</div>
+
+      <div class="ed-title" style="margin-top: 12px">Spawn Agent</div>
+      <div class="ed-row">
+        <input id="ag-name" placeholder="Name" />
+      </div>
+      <div class="ed-row">
+        <button id="ag-spawn">Spawn at hovered cell</button>
+      </div>
+    </div>
+
+    <div id="inspector">
+      <div class="ins-title">Inspector</div>
+      <div id="ins-body">Hover an agent…</div>
+    </div>
+
+    <div id="chat-feed"></div>
+
+    <div id="login-modal" style="display: none">
+      <div class="modal">
+        <h3>Login</h3>
+        <input id="lg-user" placeholder="username" />
+        <input id="lg-pass" placeholder="password" type="password" />
+        <button id="lg-go">Login</button>
+        <button id="lg-cancel">Cancel</button>
+        <div id="lg-msg"></div>
+      </div>
+    </div>
+
+    <canvas id="view"></canvas>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        }
+      }
+    </script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
