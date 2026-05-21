@@ -38,7 +38,7 @@ export function perceive(agent, ctx) {
   return { around, neighbors };
 }
 
-// Greeting variety for rule-based fallback so dialogue isn't only "Hi <name>"
+// ----- Dialogue templates -----
 const GREETINGS = [
   (n) => `Hi ${n}!`,
   (n) => `Hey ${n}, how are you?`,
@@ -46,6 +46,16 @@ const GREETINGS = [
   (n) => `Oh, it's you, ${n}.`,
   (n) => `Nice to see you, ${n}.`,
   (n) => `${n}! What are you up to?`,
+];
+const FOLLOWUPS = [
+  (n) => `Yeah ${n}.`,
+  () => `Oh really?`,
+  (n) => `Tell me more, ${n}.`,
+  () => `Hmm, interesting.`,
+  (n) => `Right, ${n}.`,
+  () => `*nods*`,
+  () => `Haha.`,
+  () => `I see, I see.`,
 ];
 const MUSINGS = [
   "Wonder what's over there...",
@@ -67,8 +77,65 @@ function pick(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-// Rule-based fallback decision (now with more variety)
-export function ruleDecide(agent, perception) {
+// Build a contextual greeting that may reference visible objects/terrain.
+function buildGreeting(agent, neighbor, perception) {
+  const lines = [
+    GREETINGS[Math.floor(Math.random() * GREETINGS.length)](neighbor.name),
+  ];
+  const kindObj = perception.around.find((c) => c.kind);
+  if (kindObj && Math.random() < 0.5) {
+    lines.push(`${neighbor.name}, look at that ${kindObj.kind}.`);
+  }
+  if (perception.around.some((c) => c.terrain === "water")) {
+    lines.push(`The pond looks nice today, ${neighbor.name}.`);
+  }
+  const social = (agent.personality?.sociability ?? 50) / 100;
+  if (social > 0.7) {
+    lines.push(`${neighbor.name}! How's your day going?`);
+  }
+  return pick(lines);
+}
+
+// Direction priorities to reduce manhattan distance from (fromX,fromZ) to (toX,toZ).
+function dirsToward(fromX, fromZ, toX, toZ) {
+  const dx = toX - fromX;
+  const dz = toZ - fromZ;
+  const dirs = [];
+  // Prefer the larger axis first.
+  const xFirst = Math.abs(dx) > Math.abs(dz);
+  const xDir = dx > 0 ? 1 : dx < 0 ? 3 : null;
+  const zDir = dz > 0 ? 2 : dz < 0 ? 0 : null;
+  if (xFirst) {
+    if (xDir !== null) dirs.push(xDir);
+    if (zDir !== null) dirs.push(zDir);
+  } else {
+    if (zDir !== null) dirs.push(zDir);
+    if (xDir !== null) dirs.push(xDir);
+  }
+  return dirs;
+}
+
+// Pick the first direction whose target cell is passable AND not occupied by another agent.
+function pickPassableDir(agent, dirs, perception, agents) {
+  for (const dir of dirs) {
+    const [dx, dz] = dirVec(dir);
+    const nx = agent.x + dx;
+    const nz = agent.z + dz;
+    const cell = perception.cellMapLookup
+      ? perception.cellMapLookup(nx, nz)
+      : null;
+    if (!isPassable(cell)) continue;
+    const blocked = (agents || []).some(
+      (a) => a.id !== agent.id && a.x === nx && a.z === nz,
+    );
+    if (blocked) continue;
+    return dir;
+  }
+  return null;
+}
+
+// Rule-based decision with goal-directed conversation behavior.
+export function ruleDecide(agent, perception, agents) {
   const p = agent.personality || {};
   const a = agent.attributes || {};
   const lazy = (p.laziness ?? 50) / 100;
@@ -80,37 +147,70 @@ export function ruleDecide(agent, perception) {
     return { type: "rest", thought: "I'm exhausted." };
   }
 
-  // Adjacent neighbor + sociable? Greet with a varied line.
-  const near = perception.neighbors.find((n) => n.dist <= 1);
-  if (near && Math.random() < 0.35 + social * 0.5) {
-    const line = pick(GREETINGS)(near.name);
-    return { type: "say", text: line, thought: `Greeting ${near.name}` };
+  const adjacent = perception.neighbors.find((n) => n.dist <= 1);
+
+  // Mid-conversation: just spoke and someone is still right next to us.
+  // Never walk away — either follow up or listen quietly.
+  if (agent.last_action === "say" && adjacent) {
+    if (Math.random() < 0.4 + social * 0.4) {
+      return {
+        type: "say",
+        text: pick(FOLLOWUPS)(adjacent.name),
+        thought: `Chatting with ${adjacent.name}.`,
+      };
+    }
+    return { type: "idle", thought: `Listening to ${adjacent.name}.` };
   }
 
-  // Kind agent occasionally muses out loud to no one in particular.
+  // Adjacent neighbor → talk to them, don't move.
+  if (adjacent) {
+    const greetChance = 0.5 + social * 0.4;
+    if (Math.random() < greetChance) {
+      return {
+        type: "say",
+        text: buildGreeting(agent, adjacent, perception),
+        thought: `Greeting ${adjacent.name}.`,
+      };
+    }
+    return { type: "idle", thought: `${adjacent.name} is here.` };
+  }
+
+  // Neighbor in range but not adjacent → walk toward them if sociable enough.
+  const nearby = perception.neighbors[0];
+  if (nearby && Math.random() < 0.25 + social * 0.65) {
+    const dirs = dirsToward(
+      agent.x,
+      agent.z,
+      agent.x + nearby.dx,
+      agent.z + nearby.dz,
+    );
+    const dir = pickPassableDir(agent, dirs, perception, agents);
+    if (dir !== null) {
+      return {
+        type: "move",
+        dir,
+        thought: `Walking over to ${nearby.name}.`,
+      };
+    }
+  }
+
+  // Solo musings
   if (Math.random() < kindness * 0.08) {
     return { type: "say", text: pick(SOLO_LINES), thought: pick(MUSINGS) };
   }
-
   if (Math.random() < lazy * 0.5) {
     return { type: "idle", thought: pick(MUSINGS) };
   }
 
-  for (let i = 0; i < 4; i++) {
-    const dir = Math.floor(Math.random() * 4);
-    const [dx, dz] = dirVec(dir);
-    const nx = agent.x + dx;
-    const nz = agent.z + dz;
-    const cell = perception.cellMapLookup
-      ? perception.cellMapLookup(nx, nz)
-      : null;
-    if (isPassable(cell)) {
-      return {
-        type: "move",
-        dir,
-        thought: curious > 0.6 ? "Let's explore!" : "Wandering.",
-      };
-    }
+  // Wander
+  const wanderDirs = [0, 1, 2, 3].sort(() => Math.random() - 0.5);
+  const dir = pickPassableDir(agent, wanderDirs, perception, agents);
+  if (dir !== null) {
+    return {
+      type: "move",
+      dir,
+      thought: curious > 0.6 ? "Let's explore!" : "Wandering.",
+    };
   }
   return { type: "idle", thought: "Nowhere to go." };
 }
@@ -122,7 +222,13 @@ Allowed actions:
 - {"type":"rest","thought":"..."}
 - {"type":"say","text":"a short, in-character line","thought":"..."}
 - {"type":"idle","thought":"..."}
-The "say" text should be varied, short (under 50 chars), reflect mood/personality, and reference what's around when natural. Avoid repeating the same line. Respond ONLY with JSON.`;
+
+Behavior rules:
+- If a neighbor is at dist=1 (adjacent), DO NOT move — greet them with "say".
+- If a neighbor is at dist>1 and you want to talk, choose "move" in the direction that REDUCES dist to them (perception lists each neighbor's dx,dz).
+- If you just spoke (last_thought is your line) and a neighbor is still adjacent, do not "move"; either say a follow-up or "idle".
+- "say" text must be varied, under 50 chars, in character, may reference what's around. Never repeat your last line verbatim.
+Respond ONLY with JSON.`;
 
 export async function llmDecide(agent, perception) {
   if (!client) return null;
@@ -165,6 +271,8 @@ export async function decide(agent, ctx) {
   const perception = perceive(agent, ctx);
   perception.cellMapLookup = (x, z) => ctx.cellMap.get(`${x},${z}`);
 
+  const adjacent = perception.neighbors.find((n) => n.dist <= 1);
+
   // Per-agent llm_probability (0..1). If neighbors are right next door, boost it.
   const baseProb =
     typeof agent.llm_probability === "number" ? agent.llm_probability : 0.4;
@@ -172,9 +280,24 @@ export async function decide(agent, ctx) {
   const useLLM =
     client && Math.random() < Math.min(1, baseProb + neighborBoost);
 
+  let result = null;
   if (useLLM) {
-    const llm = await llmDecide(agent, perception);
-    if (llm) return llm;
+    result = await llmDecide(agent, perception);
   }
-  return ruleDecide(agent, perception);
+  if (!result) result = ruleDecide(agent, perception, ctx.agents);
+
+  // Final guard: if we are next to someone and just spoke, never walk away —
+  // the LLM may not always honor this. Convert any "move" into "idle".
+  if (
+    adjacent &&
+    agent.last_action === "say" &&
+    result &&
+    result.type === "move"
+  ) {
+    return {
+      type: "idle",
+      thought: `(staying with ${adjacent.name})`,
+    };
+  }
+  return result;
 }

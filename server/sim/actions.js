@@ -82,6 +82,19 @@ export async function applyAction(agent, action, ctx) {
     case "say": {
       const text = String(action.text || "").slice(0, 200);
       attrs.social = clamp((attrs.social ?? 50) + 5, 0, 100);
+      // Face an adjacent neighbor (if any) so the two characters look at each other.
+      const others = (ctx.agents || []).filter((o) => o.id !== agent.id);
+      const adj = others.find(
+        (o) => Math.abs(o.x - x) + Math.abs(o.z - z) === 1,
+      );
+      if (adj) {
+        const ddx = adj.x - x;
+        const ddz = adj.z - z;
+        if (ddz < 0) facing = 0;
+        else if (ddx > 0) facing = 1;
+        else if (ddz > 0) facing = 2;
+        else if (ddx < 0) facing = 3;
+      }
       await logEvent(agent.id, worldId, tick, "say", { text });
       broadcast(worldId, { type: "say", agentId: agent.id, text });
       lastThought = text;
