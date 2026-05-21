@@ -77,6 +77,10 @@
       <div id="ins-admin" style="display: none">
         <div class="ins-title" style="margin-top: 10px">AI Control (admin)</div>
         <div class="ed-row">
+          <label>Job</label>
+          <input id="ai-profession" placeholder="e.g. farmer" />
+        </div>
+        <div class="ed-row">
           <label>Tick(ms)</label>
           <input id="ai-interval" type="number" min="200" step="100" />
         </div>
@@ -89,6 +93,14 @@
           <input id="ai-model" placeholder="(default)" />
         </div>
         <div class="ed-row">
+          <label>Goals</label>
+        </div>
+        <textarea
+          id="ai-goals"
+          rows="3"
+          placeholder="One goal per line…"
+        ></textarea>
+        <div class="ed-row" style="margin-top: 6px">
           <label>Prompt</label>
         </div>
         <textarea

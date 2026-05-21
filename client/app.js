@@ -224,7 +224,8 @@ function clampCamera() {
 function resetCamera() {
   camState.theta = DEFAULT_CAM.theta;
   camState.phi = DEFAULT_CAM.phi;
-  camState.dist = DEFAULT_CAM.dist;
+  // Scale zoom with the world size so larger maps still fit in view.
+  camState.dist = Math.max(DEFAULT_CAM.dist, gridSize * 1.4);
   camState.target.set(0, 0, 0);
 }
 function updateCamera() {
@@ -627,21 +628,31 @@ function populateAIPanel() {
   }
   panel.style.display = "";
   const d = node.data;
+  document.getElementById("ai-profession").value = d.profession ?? "";
   document.getElementById("ai-interval").value = d.tick_interval_ms ?? 1500;
   document.getElementById("ai-prob").value =
     d.llm_probability != null ? Number(d.llm_probability).toFixed(2) : 0.4;
   document.getElementById("ai-model").value = d.ai_model ?? "";
   document.getElementById("ai-prompt").value = d.system_prompt ?? "";
+  const goalsArr = Array.isArray(d.goals) ? d.goals : [];
+  document.getElementById("ai-goals").value = goalsArr.join("\n");
 }
 
 document.getElementById("ai-save")?.addEventListener("click", async () => {
   if (!selectedAgentId) return;
+  const goalsText = document.getElementById("ai-goals").value;
+  const goals = goalsText
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
   const body = {
+    profession: document.getElementById("ai-profession").value.trim() || null,
     tick_interval_ms:
       parseInt(document.getElementById("ai-interval").value, 10) || 1500,
     llm_probability: parseFloat(document.getElementById("ai-prob").value) || 0,
     ai_model: document.getElementById("ai-model").value.trim() || null,
     system_prompt: document.getElementById("ai-prompt").value || null,
+    goals,
   };
   const r = await fetch(`/api/agents/${selectedAgentId}`, {
     method: "PATCH",
@@ -726,11 +737,17 @@ function updateInspector() {
   const bar = (label, v) =>
     `<div class="row"><span class="k">${label}</span><span>${Math.round(v)}</span></div>
      <div class="bar"><div style="width:${Math.max(0, Math.min(100, v))}%"></div></div>`;
+  const goalsList = Array.isArray(d.goals) ? d.goals : [];
   body.innerHTML = `
-    <div><b>${escapeHtml(d.name)}</b> #${d.id}</div>
+    <div><b>${escapeHtml(d.name)}</b> #${d.id}${d.profession ? ` · <span style="opacity:0.7">${escapeHtml(d.profession)}</span>` : ""}</div>
     <div class="row"><span class="k">Position</span><span>(${d.x}, ${d.z})</span></div>
     <div class="row"><span class="k">Action</span><span>${escapeHtml(d.last_action || "")}</span></div>
     <div class="row"><span class="k">Thought</span><span>${escapeHtml((d.last_thought || "").slice(0, 30))}</span></div>
+    ${
+      goalsList.length
+        ? `<div class="row"><span class="k">Goals</span><span style="text-align:right">${goalsList.map((g) => escapeHtml(g)).join("<br/>")}</span></div>`
+        : ""
+    }
     <hr style="opacity:0.2; margin:6px 0"/>
     ${bar("HP", a.hp ?? 0)}
     ${bar("Energy", a.energy ?? 0)}
@@ -747,6 +764,7 @@ function updateInspector() {
 }
 
 // ----- Network -----
+let worldLoadedOnce = false;
 async function loadWorld() {
   const r = await fetch(`/api/worlds/${worldId}`);
   if (!r.ok) {
@@ -762,6 +780,12 @@ async function loadWorld() {
   const liveIds = new Set(d.agents.map((a) => a.id));
   for (const id of [...agentNodes.keys()])
     if (!liveIds.has(id)) removeAgentNode(id);
+  // First time we receive the world, reset the camera so it's framed properly
+  // regardless of the world size.
+  if (!worldLoadedOnce) {
+    worldLoadedOnce = true;
+    resetCamera();
+  }
 }
 
 let ws = null;

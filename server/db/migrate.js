@@ -37,7 +37,7 @@ export async function runMigrations({ closePool = false } = {}) {
     ]);
     const ownerId = owner.rows[0]?.id ?? null;
     const ins = await pool.query(
-      `INSERT INTO worlds (name, grid_size, owner_id) VALUES ('Default World', 16, $1) RETURNING id`,
+      `INSERT INTO worlds (name, grid_size, owner_id) VALUES ('Default World', 32, $1) RETURNING id`,
       [ownerId],
     );
     worldId = ins.rows[0].id;
@@ -45,6 +45,12 @@ export async function runMigrations({ closePool = false } = {}) {
   } else {
     worldId = w.rows[0].id;
   }
+
+  // Read the world's grid_size so the seeder can adapt.
+  const gs = await pool.query(`SELECT grid_size FROM worlds WHERE id=$1`, [
+    worldId,
+  ]);
+  const gridSize = gs.rows[0]?.grid_size ?? 32;
 
   // Seed sample cells + agents if the world is empty.
   const cellCount = await pool.query(
@@ -56,92 +62,156 @@ export async function runMigrations({ closePool = false } = {}) {
     [worldId],
   );
   if (cellCount.rows[0].n === 0 && agentCount.rows[0].n === 0) {
-    await seedWorld(worldId);
-    console.log(`[migrate] seeded world id=${worldId}`);
+    await seedWorld(worldId, gridSize);
+    console.log(
+      `[migrate] seeded world id=${worldId} (${gridSize}x${gridSize})`,
+    );
   }
 
   if (closePool) await pool.end();
   console.log("[migrate] done");
 }
 
-async function seedWorld(worldId) {
-  // A small village: dirt path crossing, a pond, a few trees, houses, flowers.
-  const cells = [];
+async function seedWorld(worldId, gridSize = 32) {
+  // Procedural generation for a gridSize x gridSize world.
+  // World coords range from -half .. half-1 in both axes.
+  const half = Math.floor(gridSize / 2);
+  const cells = new Map(); // "x,z" -> { terrain, kind }
+  const set = (x, z, terrain, kind = null) => {
+    if (x < -half || x >= half || z < -half || z >= half) return;
+    cells.set(`${x},${z}`, { x, z, terrain, kind });
+  };
+  const get = (x, z) => cells.get(`${x},${z}`);
+  const isFree = (x, z) => {
+    const c = get(x, z);
+    return !c || (c.terrain === "grass" && !c.kind);
+  };
 
-  // Horizontal path
-  for (let x = -7; x <= 6; x++) cells.push({ x, z: 0, terrain: "path" });
-  // Vertical path
-  for (let z = -7; z <= 6; z++) cells.push({ x: 0, z, terrain: "path" });
+  // ----- Paths: two main roads crossing through origin, plus offshoots -----
+  for (let x = -half; x < half; x++) set(x, 0, "path");
+  for (let z = -half; z < half; z++) set(0, z, "path");
+  // Side path west
+  for (let z = -half + 2; z <= 0; z++) set(-Math.floor(half / 2), z, "path");
+  // Side path east
+  for (let z = 0; z < half - 2; z++) set(Math.floor(half / 2), z, "path");
 
-  // Pond (water + sand rim)
-  for (let x = -6; x <= -4; x++) {
-    for (let z = -6; z <= -4; z++) {
-      cells.push({ x, z, terrain: "water" });
+  // ----- Two ponds with sand rims -----
+  const ponds = [
+    { cx: -Math.floor(half * 0.55), cz: -Math.floor(half * 0.55), r: 3 },
+    { cx: Math.floor(half * 0.5), cz: Math.floor(half * 0.55), r: 2 },
+  ];
+  for (const p of ponds) {
+    for (let dz = -p.r - 1; dz <= p.r + 1; dz++) {
+      for (let dx = -p.r - 1; dx <= p.r + 1; dx++) {
+        const d = Math.max(Math.abs(dx), Math.abs(dz));
+        const x = p.cx + dx;
+        const z = p.cz + dz;
+        if (get(x, z)?.terrain === "path") continue;
+        if (d <= p.r) set(x, z, "water");
+        else if (d === p.r + 1) set(x, z, "sand");
+      }
     }
   }
-  for (const [x, z] of [
-    [-7, -6],
-    [-7, -5],
-    [-7, -4],
-    [-3, -6],
-    [-3, -5],
-    [-3, -4],
-    [-6, -7],
-    [-5, -7],
-    [-4, -7],
-    [-6, -3],
-    [-5, -3],
-    [-4, -3],
-  ]) {
-    cells.push({ x, z, terrain: "sand" });
+
+  // ----- Forest patches (clusters of trees) -----
+  const forests = [
+    {
+      cx: -Math.floor(half * 0.7),
+      cz: Math.floor(half * 0.6),
+      n: 14,
+      spread: 4,
+    },
+    {
+      cx: Math.floor(half * 0.7),
+      cz: -Math.floor(half * 0.7),
+      n: 12,
+      spread: 4,
+    },
+    {
+      cx: -Math.floor(half * 0.2),
+      cz: Math.floor(half * 0.85),
+      n: 8,
+      spread: 3,
+    },
+  ];
+  for (const f of forests) {
+    for (let i = 0; i < f.n; i++) {
+      const x = f.cx + Math.floor((Math.random() * 2 - 1) * f.spread);
+      const z = f.cz + Math.floor((Math.random() * 2 - 1) * f.spread);
+      if (isFree(x, z)) set(x, z, "grass", "tree");
+    }
   }
 
-  // Trees
-  for (const [x, z] of [
-    [-2, 3],
-    [3, 4],
-    [5, -2],
-    [-5, 5],
-    [4, -5],
-  ]) {
-    cells.push({ x, z, terrain: "grass", kind: "tree" });
+  // ----- Villages (clusters of houses) -----
+  const villages = [
+    {
+      cx: Math.floor(half * 0.4),
+      cz: Math.floor(half * 0.3),
+      houses: [
+        [0, 0],
+        [2, 0],
+        [0, 2],
+        [2, 2],
+        [-1, 1],
+      ],
+    },
+    {
+      cx: -Math.floor(half * 0.35),
+      cz: -Math.floor(half * 0.15),
+      houses: [
+        [0, 0],
+        [2, 0],
+        [1, -2],
+      ],
+    },
+  ];
+  for (const v of villages) {
+    for (const [dx, dz] of v.houses) {
+      const x = v.cx + dx;
+      const z = v.cz + dz;
+      if (isFree(x, z)) set(x, z, "grass", "house");
+    }
   }
 
-  // Houses
-  for (const [x, z] of [
-    [3, 2],
-    [-3, -2],
-    [5, 5],
-  ]) {
-    cells.push({ x, z, terrain: "grass", kind: "house" });
+  // ----- Stone patch + scattered rocks -----
+  const stoneCx = Math.floor(half * 0.85);
+  const stoneCz = -Math.floor(half * 0.4);
+  for (let dz = -1; dz <= 1; dz++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const x = stoneCx + dx;
+      const z = stoneCz + dz;
+      if (isFree(x, z)) set(x, z, "stone");
+    }
+  }
+  for (let i = 0; i < 8; i++) {
+    const x = Math.floor((Math.random() * 2 - 1) * (half - 1));
+    const z = Math.floor((Math.random() * 2 - 1) * (half - 1));
+    if (isFree(x, z)) set(x, z, "grass", "rock");
   }
 
-  // Flowers and bushes
-  for (const [x, z] of [
-    [2, 3],
-    [-2, 4],
-    [4, 3],
-    [-4, 2],
-  ]) {
-    cells.push({ x, z, terrain: "grass", kind: "flower" });
-  }
-  for (const [x, z] of [
-    [-3, 3],
-    [3, -3],
-  ]) {
-    cells.push({ x, z, terrain: "grass", kind: "bush" });
+  // ----- Snow patch in one corner -----
+  for (let dz = 0; dz < 4; dz++) {
+    for (let dx = 0; dx < 4; dx++) {
+      const x = -half + dx;
+      const z = -half + dz;
+      if (isFree(x, z)) set(x, z, "snow");
+    }
   }
 
-  // Stone/rocks
-  for (const [x, z] of [
-    [6, 6],
-    [-6, 6],
-    [6, -7],
-  ]) {
-    cells.push({ x, z, terrain: "grass", kind: "rock" });
+  // ----- Flowers & bushes scattered on grass -----
+  for (let i = 0; i < 30; i++) {
+    const x = Math.floor((Math.random() * 2 - 1) * (half - 1));
+    const z = Math.floor((Math.random() * 2 - 1) * (half - 1));
+    if (isFree(x, z)) set(x, z, "grass", "flower");
+  }
+  for (let i = 0; i < 18; i++) {
+    const x = Math.floor((Math.random() * 2 - 1) * (half - 1));
+    const z = Math.floor((Math.random() * 2 - 1) * (half - 1));
+    if (isFree(x, z)) set(x, z, "grass", "bush");
   }
 
-  for (const c of cells) {
+  // Persist all generated non-default cells.
+  for (const c of cells.values()) {
     await pool.query(
       `INSERT INTO cells (world_id, x, z, terrain, kind, floors, terrain_floors)
        VALUES ($1, $2, $3, $4, $5, 1, 1)
@@ -150,12 +220,14 @@ async function seedWorld(worldId) {
     );
   }
 
-  // Three sample villagers with distinct personalities.
+  // ----- Villagers with distinct professions, goals, and personas -----
   const villagers = [
     {
       name: "Mira",
       x: 1,
       z: 1,
+      profession: "explorer",
+      goals: ["Map every corner of the woods", "Find the hidden pond"],
       appearance: {
         skinColor: "#f1c27d",
         hairColor: "#5a3a1b",
@@ -163,17 +235,23 @@ async function seedWorld(worldId) {
         pantsColor: "#3d405b",
       },
       personality: {
-        curiosity: 85,
-        bravery: 60,
-        sociability: 70,
-        laziness: 20,
-        kindness: 75,
+        curiosity: 90,
+        bravery: 70,
+        sociability: 65,
+        laziness: 15,
+        kindness: 70,
       },
+      tick_interval_ms: 1200,
+      llm_probability: 0.7,
+      system_prompt:
+        "You are Mira, an explorer obsessed with discovering new places. Speak with energy and wonder. Reply in JSON as instructed.",
     },
     {
       name: "Otto",
       x: -2,
       z: -1,
+      profession: "elder",
+      goals: ["Rest by the pond", "Avoid the children"],
       appearance: {
         skinColor: "#e0ac69",
         hairColor: "#222222",
@@ -181,17 +259,23 @@ async function seedWorld(worldId) {
         pantsColor: "#3d405b",
       },
       personality: {
-        curiosity: 30,
+        curiosity: 25,
         bravery: 80,
         sociability: 25,
-        laziness: 60,
+        laziness: 70,
         kindness: 40,
       },
+      tick_interval_ms: 2400,
+      llm_probability: 0.3,
+      system_prompt:
+        "You are Otto, the village elder — gruff, lazy, opinionated. Speak tersely, occasionally grumble. Reply in JSON as instructed.",
     },
     {
       name: "Wren",
       x: 2,
       z: -2,
+      profession: "trader",
+      goals: ["Greet every villager today", "Hear the latest gossip"],
       appearance: {
         skinColor: "#c68642",
         hairColor: "#c79b5b",
@@ -201,38 +285,97 @@ async function seedWorld(worldId) {
       personality: {
         curiosity: 65,
         bravery: 35,
-        sociability: 90,
-        laziness: 45,
+        sociability: 95,
+        laziness: 35,
         kindness: 85,
       },
+      tick_interval_ms: 1500,
+      llm_probability: 0.8,
+      system_prompt:
+        "You are Wren, a warm trader who loves chatting and remembers everyone. Ask questions, share small observations. Reply in JSON as instructed.",
+    },
+    {
+      name: "Felix",
+      x: Math.floor(half * 0.4),
+      z: Math.floor(half * 0.3) - 1,
+      profession: "farmer",
+      goals: ["Tend the flower fields", "Keep the path swept"],
+      appearance: {
+        skinColor: "#d2a06a",
+        hairColor: "#3a2510",
+        shirtColor: "#6b9a4a",
+        pantsColor: "#4a3318",
+      },
+      personality: {
+        curiosity: 40,
+        bravery: 50,
+        sociability: 55,
+        laziness: 30,
+        kindness: 80,
+      },
+      tick_interval_ms: 1800,
+      llm_probability: 0.5,
+      system_prompt:
+        "You are Felix, a patient flower farmer who notices small things in nature. Speak gently. Reply in JSON as instructed.",
+    },
+    {
+      name: "Luna",
+      x: -Math.floor(half * 0.35),
+      z: -Math.floor(half * 0.15) + 1,
+      profession: "scholar",
+      goals: ["Observe villagers and record habits", "Identify each plant"],
+      appearance: {
+        skinColor: "#f4d3a3",
+        hairColor: "#1f1f1f",
+        shirtColor: "#5a6abf",
+        pantsColor: "#2a2f44",
+      },
+      personality: {
+        curiosity: 95,
+        bravery: 40,
+        sociability: 50,
+        laziness: 25,
+        kindness: 60,
+      },
+      tick_interval_ms: 1700,
+      llm_probability: 0.7,
+      system_prompt:
+        "You are Luna, a quiet scholar cataloguing the world. Speak precisely, ask probing questions. Reply in JSON as instructed.",
+    },
+    {
+      name: "Pip",
+      x: Math.floor(half * 0.4) + 1,
+      z: Math.floor(half * 0.3) + 2,
+      profession: "child",
+      goals: ["Find someone to play with", "Pick flowers"],
+      appearance: {
+        skinColor: "#f7d8a5",
+        hairColor: "#d4a35a",
+        shirtColor: "#f08bb4",
+        pantsColor: "#6b3fa0",
+      },
+      personality: {
+        curiosity: 80,
+        bravery: 50,
+        sociability: 85,
+        laziness: 20,
+        kindness: 75,
+      },
+      tick_interval_ms: 1000,
+      llm_probability: 0.6,
+      system_prompt:
+        "You are Pip, an excitable child. Speak in short bursts, exclaim often, get distracted easily. Reply in JSON as instructed.",
     },
   ];
-  // Per-villager AI flavor: tick interval (how often they act) + LLM use probability + persona prompt
-  villagers[0].tick_interval_ms = 1200;
-  villagers[0].llm_probability = 0.7;
-  villagers[0].system_prompt =
-    "You are Mira, a curious, brave explorer who loves discovering new places. " +
-    "Speak with energy and wonder. Reply in JSON as instructed.";
-
-  villagers[1].tick_interval_ms = 2200;
-  villagers[1].llm_probability = 0.3;
-  villagers[1].system_prompt =
-    "You are Otto, a gruff and lazy old man who prefers naps to adventure. " +
-    "Speak tersely, occasionally grumble. Reply in JSON as instructed.";
-
-  villagers[2].tick_interval_ms = 1500;
-  villagers[2].llm_probability = 0.8;
-  villagers[2].system_prompt =
-    "You are Wren, a warm and sociable villager who likes chatting with everyone. " +
-    "Speak kindly, ask questions, mention what you see. Reply in JSON as instructed.";
 
   for (const v of villagers) {
     await pool.query(
       `INSERT INTO agents (
          world_id, name, x, z, appearance, personality, attributes,
-         tick_interval_ms, llm_probability, system_prompt
+         tick_interval_ms, llm_probability, system_prompt,
+         profession, goals
        )
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10)`,
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12::jsonb)`,
       [
         worldId,
         v.name,
@@ -250,6 +393,8 @@ async function seedWorld(worldId) {
         v.tick_interval_ms,
         v.llm_probability,
         v.system_prompt,
+        v.profession,
+        JSON.stringify(v.goals),
       ],
     );
   }

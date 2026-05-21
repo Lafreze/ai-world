@@ -43,7 +43,7 @@ export default async function agentsRoutes(fastify) {
       `SELECT id, name, x, z, facing, appearance, personality, attributes,
               memory, goals, last_action, last_thought,
               tick_interval_ms, llm_probability, ai_model, system_prompt,
-              created_at
+              profession, created_at
        FROM agents WHERE world_id=$1 ORDER BY id ASC`,
       [id],
     );
@@ -130,6 +130,7 @@ export default async function agentsRoutes(fastify) {
         "llm_probability",
         "ai_model",
         "system_prompt",
+        "profession",
       ];
       const sets = [];
       const vals = [];

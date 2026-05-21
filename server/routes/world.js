@@ -44,7 +44,8 @@ export default async function worldRoutes(fastify) {
     const ar = await query(
       `SELECT id, name, x, z, facing, appearance, personality, attributes,
               last_action, last_thought,
-              tick_interval_ms, llm_probability, ai_model, system_prompt
+              tick_interval_ms, llm_probability, ai_model, system_prompt,
+              profession, goals
        FROM agents WHERE world_id=$1`,
       [id],
     );

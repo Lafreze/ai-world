@@ -326,7 +326,7 @@ export function ruleDecide(agent, perception, agents) {
   return { type: "idle", thought: "Nowhere to go." };
 }
 
-const DEFAULT_SYSTEM_PROMPT = `You are an autonomous tiny-world villager. Stay in character based on the personality numbers (0-100).
+const DEFAULT_SYSTEM_PROMPT = `You are an autonomous tiny-world villager. Stay in character based on your profession, goals, and personality numbers (0-100). Let your profession and goals influence what you talk about and where you go.
 You receive a JSON state and must reply with ONE JSON action.
 Allowed actions:
 - {"type":"move","dir":0|1|2|3,"thought":"..."}  // 0=N 1=E 2=S 3=W
@@ -350,6 +350,7 @@ export async function llmDecide(agent, perception) {
     const user = JSON.stringify({
       me: {
         name: agent.name,
+        profession: agent.profession || null,
         personality: agent.personality,
         attributes: agent.attributes,
         goals: agent.goals,
