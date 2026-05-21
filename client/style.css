@@ -157,6 +157,35 @@ button:hover {
   margin-right: 6px;
 }
 
+#welcome {
+  position: fixed;
+  top: 70px;
+  left: 12px;
+  z-index: 5;
+  background: rgba(20, 24, 32, 0.9);
+  padding: 12px 36px 12px 14px;
+  border-radius: 10px;
+  width: 320px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+#welcome code {
+  background: #2a3242;
+  padding: 0 4px;
+  border-radius: 3px;
+}
+#welcome-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: transparent;
+  border: none;
+  color: #e6e8eb;
+  font-size: 18px;
+  padding: 0 6px;
+  cursor: pointer;
+}
+
 #login-modal {
   position: fixed;
   inset: 0;

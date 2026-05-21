@@ -426,7 +426,14 @@ function refreshAuthUI() {
   document.getElementById("logoutBtn").style.display = u ? "" : "none";
   document.getElementById("editor").style.display =
     u?.role === "admin" ? "" : "none";
+  // Hide welcome banner once admin logs in, so it doesn't overlap the editor.
+  const welcome = document.getElementById("welcome");
+  if (welcome && u?.role === "admin") welcome.style.display = "none";
 }
+
+document.getElementById("welcome-close")?.addEventListener("click", () => {
+  document.getElementById("welcome").style.display = "none";
+});
 
 // ----- Inspector -----
 function updateInspector() {
